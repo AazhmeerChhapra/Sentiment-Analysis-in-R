@@ -1,0 +1,191 @@
+---
+title: "assignment2"
+output:
+  html_document: default
+  pdf_document: default
+date: "`r Sys.Date()`"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r}
+library("tm")
+library("caret")
+library("SnowballC")
+library("wordcloud")
+library("RColorBrewer")
+library("ggplot2")
+library("dplyr")
+library("tidytext")
+library("sentimentr")
+library("tidyverse")
+library("tibble")
+library("lexicon")
+library("tidyr")
+```
+
+
+
+```{r}
+#store .csv file
+review <- read.csv("F:\\gufran\\R helping material\\MS4S09_CW_Data.csv")
+```
+
+```{r}
+#building a corpus
+corp <- Corpus(VectorSource(review$Review.Text))
+#inspect(corp)
+```
+
+```{r, echo=FALSE}
+corpus_processed <- corp %>%
+  tm_map(removeNumbers) %>%
+  tm_map(removePunctuation) %>%
+  tm_map(removeWords, stopwords("english")) %>%
+  tm_map(stripWhitespace) %>%
+  tm_map(tolower) %>%
+  tm_map(stemDocument)
+
+```
+```{r}
+inspect(corpus_processed)
+```
+
+```{r}
+# Convert corpus to a document-term matrix
+dtm <- DocumentTermMatrix(corpus_processed)
+dtm <- removeSparseTerms(dtm, 0.9)
+dtm
+# Convert document-term matrix to a data frame
+dtm_df <- as.data.frame(as.matrix(dtm))
+```
+
+```{r}
+library(wordcloud)
+
+# Calculate word frequencies
+word_freq <- colSums(dtm_df)
+
+# Create a word cloud
+wordcloud(names(word_freq), word_freq, max.words = 100, random.order = FALSE, colors = brewer.pal(8, "Dark2"))
+
+```
+
+
+Section B Sentiment Analysis
+```{r}
+afinn <- get_sentiments("afinn")
+afinn <- rename(afinn, term = word)
+myTdm <- TermDocumentMatrix(corpus_processed)
+myDfm <- as.data.frame(as.matrix(myTdm))
+
+# convert the dataframe to a tidy format
+myTidyDfm <- myDfm %>%
+  rownames_to_column(var = "term") %>%
+  pivot_longer(cols = -term, names_to = "document", values_to = "count")
+
+# join the sentiment lexicon with the tidy dfm
+myTidyDfm <- inner_join(myTidyDfm, afinn, by = "term")
+
+# compute the sentiment scores for each document
+mySentiment <- myTidyDfm %>%
+  group_by(document) %>%
+  summarize(sentiment = sum(value * count))
+```
+
+```{r}
+ggplot(data = mySentiment, aes(x = document, y = sentiment)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  labs(title = "Sentiment Analysis", x = "Document", y = "Sentiment Score")
+
+
+```
+
+
+
+```{r}
+# get the topic distribution for each document
+dtm <- dtm[apply(dtm, 1, sum) > 0, ]
+
+library(topicmodels)
+set.seed(123)
+myLda <- LDA(dtm, k = 5, control = list(seed = 1234))
+
+# show the top 10 terms for each topic
+terms <- terms(myLda, 10)
+topic_words <- data.frame(term = unlist(terms),topic = rep(1:5, each = 10))
+topic_words <- tidy(myLda, matrix = "beta") %>%
+  group_by(topic) %>%
+  top_n(10, beta) %>%
+  arrange(topic, -beta)
+
+```
+
+```{r}
+ggplot(topic_words, aes(x = reorder(term, beta), y = beta, fill = factor(topic))) +
+  geom_col() +
+  facet_wrap(~factor(topic), scales = "free") +
+  labs(x = "Words", y = "Association", title = "top associated words for topics")
+```
+
+```{r}
+doc_topics <- tidy(myLda, matrix = "gamma")
+
+# create a boxplot of the topic proportions
+ggplot(doc_topics, aes(x = factor(topic), y = gamma)) +
+  geom_boxplot(fill = "steelblue") +
+  labs(x = "Topic", y = "Proportion", title = "Distribution of Topic Proportions")
+```
+
+```{r}
+topic_props <- aggregate(gamma ~ topic, data = doc_topics, FUN = mean)
+
+# create a bar graph of the average topic proportions
+ggplot(topic_props, aes(x = factor(topic), y = gamma)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  labs(x = "Topic", y = "Average Proportion", title = "Average Topic Proportions Across All Documents")
+
+```
+Conclusion:  all proportions lie between 0.190 to 0.215, it suggests that there is not much variation in the data and that the values are relatively consistent. This may be an indication that the data is tightly clustered around a central value, or that the underlying process generating the data is highly constrained or stable. a narrow range of values may suggest that the product is consistently meeting customers' expectations. it suggests that the product or service being reviewed is meeting customer expectations to a high degree. This may be an indication that the product is of high quality and is consistently meeting customer needs.
+
+
+```{r}
+all_dtm<- DocumentTermMatrix(corpus_processed)
+review_data <- as.data.frame(as.matrix(all_dtm))
+review_data$Age <- review$Age
+review_data$Recommended.IND <- review$Recommended.IND
+review_data$Positive.Feedback.Count <- review$Positive.Feedback.Count
+review_data$Division.Name <- review$Division.Name
+review_data$Department.Name <- review$Department.Name
+review_data$Class.Name <- review$Class.Name
+review_data$Rating <- review$Rating
+```
+
+```{r}
+
+set.seed(123)
+train_index <- createDataPartition(review_data$Rating, p = 0.7, list = FALSE)
+train_data <- review_data[train_index, ]
+test_data <- review_data[-train_index, ]
+```
+
+```{r}
+model <- train(Rating ~ ., data = train_data, method = "svmLinear")
+```
+
+```{r}
+predictions <- predict(model, newdata = test_data)
+confusionMatrix(predictions, test_data$Rating)
+```
+
+```{r}
+
+```
